@@ -1,1 +1,1 @@
-# ResNet18_algortihms_comparison
+# ResNet18_algorithms_comparison
