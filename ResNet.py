@@ -147,9 +147,9 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
 
-        print(
-            "Shape before avgpool:", x.shape
-        )  # Debugging line, shape should be 7 x 7 with input size 224 x 224
+        # print(
+        #     "Shape before avgpool:", x.shape
+        # )  # Debugging line, shape should be 7 x 7 with input size 224 x 224
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
