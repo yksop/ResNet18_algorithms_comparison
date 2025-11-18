@@ -29,9 +29,9 @@ np.random.seed(seed)
 random.seed(seed)
 
 # Learning and training parameters.
-epochs = 20
-batch_size = 64
-learning_rate = 0.01
+epochs = 60
+batch_size = 256
+learning_rate = 0.1
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 train_loader, valid_loader = get_data(batch_size=batch_size)
@@ -59,9 +59,21 @@ total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires
 print(f"{total_trainable_params:,} training parameters.")
 
 # Optimizer.
-optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+optimizer = optim.SGD(
+    model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4
+)
+# Learning rate scheduler.
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=learning_rate,
+    steps_per_epoch=len(train_loader),
+    epochs=epochs,
+    pct_start=0.3,
+    anneal_strategy="cos",
+)
+
 # Loss function.
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
 if __name__ == "__main__":
     # Lists to keep track of losses and accuracies.
@@ -71,7 +83,7 @@ if __name__ == "__main__":
     for epoch in range(epochs):
         print(f"[INFO]: Epoch {epoch+1} of {epochs}")
         train_epoch_loss, train_epoch_acc = train(
-            model, train_loader, optimizer, criterion, device
+            model, train_loader, optimizer, criterion, device, scheduler
         )
         valid_epoch_loss, valid_epoch_acc = validate(
             model, valid_loader, criterion, device

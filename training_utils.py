@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 
 # Training function.
-def train(model, trainloader, optimizer, criterion, device):
+def train(model, trainloader, optimizer, criterion, device, scheduler):
     model.train()
     print("Training")
     train_running_loss = 0.0
@@ -28,6 +28,8 @@ def train(model, trainloader, optimizer, criterion, device):
         loss.backward()
         # Update the weights.
         optimizer.step()
+        # Update LR scheduler
+        scheduler.step()
 
     # Loss and accuracy for the complete epoch.
     epoch_loss = train_running_loss / counter

@@ -3,25 +3,43 @@ import os
 from typing import Optional
 
 from torch.utils.data import DataLoader
-from torchvision import datasets
+from torchvision import datasets, transforms
 from torchvision.transforms import ToTensor
 
 plt.style.use("ggplot")
 
 
 def get_data(batch_size=64):
+    train_transform = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ]
+    )
+
+    valid_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ]
+    )
+
     dataset_train = datasets.CIFAR10(
         root="data",
         train=True,
         download=True,
-        transform=ToTensor(),
+        transform=train_transform,
     )
 
     dataset_valid = datasets.CIFAR10(
         root="data",
         train=False,
         download=True,
-        transform=ToTensor(),
+        transform=valid_transform,
     )
 
     train_loader = DataLoader(
