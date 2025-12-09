@@ -4,11 +4,17 @@ import torch.optim as optim
 import argparse
 import numpy as np
 import random
+import os
 
 from ResNet import ResNet, BasicBlock
 from ResNet18_torchvision import build_model
 from training_utils import train, validate
 from utils import save_plots, get_data
+
+best_val_acc = 0.0
+best_epoch = -1
+warmup_epochs = 5
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -58,48 +64,94 @@ print(f"{total_params:,} total parameters.")
 total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"{total_trainable_params:,} training parameters.")
 
-# Optimizer.
-optimizer = optim.SGD(
-    model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4
-)
-# Learning rate scheduler.
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimizer,
-    max_lr=learning_rate,
-    steps_per_epoch=len(train_loader),
-    epochs=epochs,
-    pct_start=0.3,
-    anneal_strategy="cos",
-)
-
 # Loss function.
 criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-if __name__ == "__main__":
-    # Lists to keep track of losses and accuracies.
-    train_loss, valid_loss = [], []
-    train_acc, valid_acc = [], []
-    # Start the training.
-    for epoch in range(epochs):
-        print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-        train_epoch_loss, train_epoch_acc = train(
-            model, train_loader, optimizer, criterion, device, scheduler
-        )
-        valid_epoch_loss, valid_epoch_acc = validate(
-            model, valid_loader, criterion, device
-        )
-        train_loss.append(train_epoch_loss)
-        valid_loss.append(valid_epoch_loss)
-        train_acc.append(train_epoch_acc)
-        valid_acc.append(valid_epoch_acc)
-        print(
-            f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}"
-        )
-        print(
-            f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}"
-        )
-        print("-" * 50)
+methods = ["sgd", "fgsm", "pgd", "trades"]
 
-    # Save the loss and accuracy plots.
-    save_plots(train_acc, valid_acc, train_loss, valid_loss, name=plot_name)
-    print("TRAINING COMPLETE")
+
+if __name__ == "__main__":
+    for method in methods:
+        model = ResNet(
+            img_channels=3, num_layers=18, block=BasicBlock, num_classes=10
+        ).to(device)
+        optimizer = torch.optim.SGD(
+            model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4
+        )
+        if method != "sgd":
+            print(f"[INFO] Starting {warmup_epochs} warmup epochs with SGD...")
+
+            for epoch in range(warmup_epochs):
+                warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = warmup_lr
+
+                train_epoch_loss, train_epoch_acc = train(
+                    model,
+                    train_loader,
+                    optimizer,
+                    criterion,
+                    device,
+                    scheduler=None,
+                    method="sgd",
+                )
+                print(
+                    f"[WARMUP] Epoch {epoch+1}/{warmup_epochs}, LR={warmup_lr:.4f}, Train Acc={train_epoch_acc:.2f}"
+                )
+
+            print("[INFO] Warmup completed. Starting full training loop...\n")
+
+        print(f"[INFO] Training {method.upper()} model")
+
+        save_dir = os.path.join("models", method)
+        os.makedirs(save_dir, exist_ok=True)
+
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=learning_rate,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+        )
+
+        train_loss, valid_loss = [], []
+        train_acc, valid_acc = [], []
+
+        for epoch in range(epochs):
+            train_epoch_loss, train_epoch_acc = train(
+                model,
+                train_loader,
+                optimizer,
+                criterion,
+                device,
+                scheduler,
+                method=method,
+            )
+            valid_epoch_loss, valid_epoch_acc = validate(
+                model, valid_loader, criterion, device
+            )
+
+            train_loss.append(train_epoch_loss)
+            valid_loss.append(valid_epoch_loss)
+            train_acc.append(train_epoch_acc)
+            valid_acc.append(valid_epoch_acc)
+
+            print(
+                f"Epoch {epoch+1}: {method.upper()} train acc {train_epoch_acc:.2f}, val acc {valid_epoch_acc:.2f}"
+            )
+
+        model_path = os.path.join(save_dir, f"{method}_model.pth")
+        torch.save(model.state_dict(), model_path)
+        print(f"[INFO] Saved model to {model_path}")
+
+        save_dir = os.path.join(method)
+        save_plots(
+            train_acc,
+            valid_acc,
+            train_loss,
+            valid_loss,
+            name=os.path.join(save_dir, f"{method}_plots"),
+        )
+
+        print(f"[INFO] Finished training {method.upper()} model\n")
+
+    print("[INFO] All adversarial models trained and saved!")
