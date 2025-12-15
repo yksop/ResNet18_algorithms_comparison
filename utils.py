@@ -73,7 +73,7 @@ def save_plots(
     plt.xlabel("Epochs")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.savefig(os.path.join("outputs", name + "_accuracy.png"))
+    plt.savefig(os.path.join(name + "_accuracy.png"))
 
     # Loss plots.
     plt.figure(figsize=(10, 7))
@@ -82,4 +82,4 @@ def save_plots(
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(os.path.join("outputs", name + "_loss.png"))
+    plt.savefig(os.path.join(name + "_loss.png"))
