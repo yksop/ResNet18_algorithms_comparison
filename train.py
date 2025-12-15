@@ -67,91 +67,118 @@ print(f"{total_trainable_params:,} training parameters.")
 # Loss function.
 criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-methods = ["sgd", "fgsm", "pgd", "trades"]
+methods = ["sgd","fgsm","pgd", "trades"]
+
+
+def ensemble_predict(models, dataloader, device, method="mean"):
+    import torch.nn.functional as F
+    from collections import Counter
+    all_preds = []
+    with torch.no_grad():
+        for images, _ in dataloader:
+            images = images.to(device)
+            outputs = []
+            for model in models:
+                model.eval()
+                out = model(images)
+                outputs.append(F.softmax(out, dim=1))
+            outputs = torch.stack(outputs)  # shape: (n_models, batch, n_classes)
+            if method == "mean":
+                mean_probs = outputs.mean(dim=0)  # (batch, n_classes)
+                preds = mean_probs.argmax(dim=1)
+            elif method == "majority":
+                preds_per_model = outputs.argmax(dim=2)  # (n_models, batch)
+                preds_per_model = preds_per_model.cpu().numpy()
+                # Majority voting per sample
+                preds = []
+                for i in range(preds_per_model.shape[1]):
+                    votes = preds_per_model[:, i]
+                    most_common = Counter(votes).most_common(1)[0][0]
+                    preds.append(most_common)
+                preds = torch.tensor(preds)
+            else:
+                raise ValueError("Unknown ensemble method")
+            all_preds.append(preds.cpu())
+    return torch.cat(all_preds)
 
 
 if __name__ == "__main__":
+    n_ensemble = 3  # Numero di modelli nell'ensemble
     for method in methods:
-        model = ResNet(
-            img_channels=3, num_layers=18, block=BasicBlock, num_classes=10
-        ).to(device)
-        optimizer = torch.optim.SGD(
-            model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4
-        )
-        if method != "sgd":
-            print(f"[INFO] Starting {warmup_epochs} warmup epochs with SGD...")
-
-            for epoch in range(warmup_epochs):
-                warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = warmup_lr
-
+        ensemble_models = []
+        for i in range(n_ensemble):
+            model = ResNet(
+                img_channels=3, num_layers=18, block=BasicBlock, num_classes=10
+            ).to(device)
+            optimizer = torch.optim.SGD(
+                model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4
+            )
+            if method != "sgd":
+                print(f"[INFO] Starting {warmup_epochs} warmup epochs with SGD for model {i}...")
+                for epoch in range(warmup_epochs):
+                    warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
+                    for param_group in optimizer.param_groups:
+                        param_group["lr"] = warmup_lr
+                    train_epoch_loss, train_epoch_acc = train(
+                        model,
+                        train_loader,
+                        optimizer,
+                        criterion,
+                        device,
+                        scheduler=None,
+                        method="sgd",
+                    )
+                    print(
+                        f"[WARMUP] Model {i} Epoch {epoch+1}/{warmup_epochs}, LR={warmup_lr:.4f}, Train Acc={train_epoch_acc:.2f}"
+                    )
+                print(f"[INFO] Warmup completed for model {i}. Starting full training loop...\n")
+            print(f"[INFO] Training {method.upper()} model {i}")
+            save_dir = os.path.join("models", method)
+            os.makedirs(save_dir, exist_ok=True)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=learning_rate,
+                epochs=epochs,
+                steps_per_epoch=len(train_loader),
+            )
+            train_loss, valid_loss = [], []
+            train_acc, valid_acc = [], []
+            for epoch in range(epochs):
                 train_epoch_loss, train_epoch_acc = train(
                     model,
                     train_loader,
                     optimizer,
                     criterion,
                     device,
-                    scheduler=None,
-                    method="sgd",
+                    scheduler,
+                    method=method,
                 )
+                valid_epoch_loss, valid_epoch_acc = validate(
+                    model, valid_loader, criterion, device
+                )
+                train_loss.append(train_epoch_loss)
+                valid_loss.append(valid_epoch_loss)
+                train_acc.append(train_epoch_acc)
+                valid_acc.append(valid_epoch_acc)
                 print(
-                    f"[WARMUP] Epoch {epoch+1}/{warmup_epochs}, LR={warmup_lr:.4f}, Train Acc={train_epoch_acc:.2f}"
+                    f"Model {i} Epoch {epoch+1}: {method.upper()} train acc {train_epoch_acc:.2f}, val acc {valid_epoch_acc:.2f}"
                 )
-
-            print("[INFO] Warmup completed. Starting full training loop...\n")
-
-        print(f"[INFO] Training {method.upper()} model")
-
-        save_dir = os.path.join("models", method)
-        os.makedirs(save_dir, exist_ok=True)
-
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=learning_rate,
-            epochs=epochs,
-            steps_per_epoch=len(train_loader),
-        )
-
-        train_loss, valid_loss = [], []
-        train_acc, valid_acc = [], []
-
-        for epoch in range(epochs):
-            train_epoch_loss, train_epoch_acc = train(
-                model,
-                train_loader,
-                optimizer,
-                criterion,
-                device,
-                scheduler,
-                method=method,
+            model_path = os.path.join(save_dir, f"{method}_model_{i}.pth")
+            torch.save(model.state_dict(), model_path)
+            print(f"[INFO] Saved model {i} to {model_path}")
+            save_plots(
+                train_acc,
+                valid_acc,
+                train_loss,
+                valid_loss,
+                name=os.path.join(save_dir, f"{method}_plots_{i}"),
             )
-            valid_epoch_loss, valid_epoch_acc = validate(
-                model, valid_loader, criterion, device
-            )
-
-            train_loss.append(train_epoch_loss)
-            valid_loss.append(valid_epoch_loss)
-            train_acc.append(train_epoch_acc)
-            valid_acc.append(valid_epoch_acc)
-
-            print(
-                f"Epoch {epoch+1}: {method.upper()} train acc {train_epoch_acc:.2f}, val acc {valid_epoch_acc:.2f}"
-            )
-
-        model_path = os.path.join(save_dir, f"{method}_model.pth")
-        torch.save(model.state_dict(), model_path)
-        print(f"[INFO] Saved model to {model_path}")
-
-        save_dir = os.path.join(method)
-        save_plots(
-            train_acc,
-            valid_acc,
-            train_loss,
-            valid_loss,
-            name=os.path.join(save_dir, f"{method}_plots"),
-        )
-
-        print(f"[INFO] Finished training {method.upper()} model\n")
-
-    print("[INFO] All adversarial models trained and saved!")
+            print(f"[INFO] Finished training {method.upper()} model {i}\n")
+            ensemble_models.append(model)
+        print(f"[INFO] All {n_ensemble} models for {method.upper()} trained and saved!")
+        # Esempio di uso ensemble (solo validazione, scegli il metodo che preferisci)
+        # preds_mean = ensemble_predict(ensemble_models, valid_loader, device, method="mean")
+        # preds_majority = ensemble_predict(ensemble_models, valid_loader, device, method="majority")
+        # print("Esempio predizioni ensemble (media):", preds_mean[:10])
+        # print("Esempio predizioni ensemble (majority):", preds_majority[:10])
+    print("[INFO] Tutti i modelli adversarial ensemble sono stati allenati e salvati!")
